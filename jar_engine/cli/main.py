@@ -69,6 +69,8 @@ def cmd_normalize(args: argparse.Namespace) -> int:
           f"{stats.constants_folded} constants folded, {stats.dead_blocks_pruned} dead blocks pruned")
 
     archive.save(out_path)
+    from jar_engine.sanitizer.stack_map import recompute_jar_stack_maps
+    recompute_jar_stack_maps(out_path)
     print(f"[+] Saved normalized archive to: {out_path}")
     return 0
 

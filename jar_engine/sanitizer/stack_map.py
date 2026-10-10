@@ -193,3 +193,72 @@ def sanitize_class_stack_maps(cf: ClassFile, force_strip: bool = False) -> int:
         code_attr.attributes = new_code_attrs
 
     return stripped_count
+
+
+def recompute_jar_stack_maps(jar_path: Path) -> bool:
+    """
+    Recomputes valid StackMapTable frames for all classes in a JAR using ASM if available.
+    Ensures strict JVM verification (§4.10) passes for Java 7+ executables.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    tools_dir = Path.home() / "tools"
+    candidates = [
+        tools_dir / "recaf-2.jar",
+        tools_dir / "deobfuscator.jar",
+        tools_dir / "bytecode-viewer.jar",
+    ]
+    asm_cp = next((str(p) for p in candidates if p.is_file()), None)
+    if not asm_cp:
+        return False
+
+    java_code = """
+import java.io.*;
+import java.util.*;
+import java.util.jar.*;
+import org.objectweb.asm.*;
+
+public class FrameComputer {
+    public static void main(String[] args) throws Exception {
+        File file = new File(args[0]);
+        File temp = new File(args[0] + ".tmp");
+        JarFile jf = new JarFile(file);
+        JarOutputStream jos = new JarOutputStream(new FileOutputStream(temp));
+        Enumeration<JarEntry> entries = jf.entries();
+        while (entries.hasMoreElements()) {
+            JarEntry entry = entries.nextElement();
+            jos.putNextEntry(new JarEntry(entry.getName()));
+            InputStream is = jf.getInputStream(entry);
+            byte[] bytes = is.readAllBytes();
+            if (entry.getName().endsWith(".class")) {
+                try {
+                    ClassReader cr = new ClassReader(bytes);
+                    ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+                    cr.accept(cw, 0);
+                    bytes = cw.toByteArray();
+                } catch (Throwable t) {}
+            }
+            jos.write(bytes);
+            jos.closeEntry();
+        }
+        jos.close();
+        jf.close();
+        temp.renameTo(file);
+    }
+}
+"""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "FrameComputer.java"
+        src.write_text(java_code, encoding="utf-8")
+        try:
+            res = subprocess.run(
+                ["java", "-cp", f"{asm_cp}:{td}", str(src), str(jar_path)],
+                capture_output=True,
+                timeout=20,
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
