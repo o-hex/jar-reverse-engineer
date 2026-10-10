@@ -34,6 +34,7 @@ from .dynamic_invoke import (
     ResolvedLambda,
     ResolvedReflectionCall,
 )
+from .pure_evaluator import PureMethodEvaluator, PureMethodScanner
 
 
 @dataclass
@@ -59,6 +60,10 @@ class MethodNormalizer:
     Applies de-flattening, constant folding, string decryption, dynamic invoke
     resolution, dead code pruning, and bytecode reassembly.
     """
+
+    def __init__(self, pure_methods: Optional[Dict[Tuple[str, str, str], Tuple[ClassFile, MethodInfo]]] = None):
+        self.pure_methods = pure_methods or {}
+        self.pure_evaluator = PureMethodEvaluator(self.pure_methods)
 
     def deflatten_control_flow(self, cfg: ControlFlowGraph) -> ControlFlowGraph:
         """F14: De-flattens switch/goto dispatch loops."""
@@ -114,6 +119,12 @@ class MethodNormalizer:
         if len(cfg.blocks) != blocks_before_deflat or len(cfg.edges) != edges_before_deflat:
             stats.deflattened = True
 
+        # Step 6b: Symbolic pure method evaluation & opaque predicate/switch unrolling
+        pure_simplified = self.pure_evaluator.simplify_cfg(
+            cfg, cf, cf.constant_pool, exception_table=code_attr.exception_table
+        )
+        stats.constants_folded += pure_simplified
+
         # Step 7: Dead code & NOP pruning (F19)
         pruned_blocks, nops_removed = prune_dead_code_and_nops(cfg, code_attr.exception_table)
         stats.dead_blocks_pruned = pruned_blocks
@@ -138,6 +149,29 @@ class MethodNormalizer:
 
         return stats
 
+    def normalize_archive(self, archive: Any) -> NormalizationStats:
+        """
+        Scans pure methods archive-wide and normalizes all methods across the archive.
+        """
+        if not self.pure_methods:
+            self.pure_methods = PureMethodScanner.scan_archive(archive)
+            self.pure_evaluator = PureMethodEvaluator(self.pure_methods)
+
+        total_stats = NormalizationStats()
+        for c_name, cf in archive.classes.items():
+            for m in cf.methods:
+                m_stats = self.normalize_method(cf, m)
+                total_stats.constants_folded += m_stats.constants_folded
+                total_stats.strings_decrypted += m_stats.strings_decrypted
+                total_stats.dead_blocks_pruned += m_stats.dead_blocks_pruned
+                total_stats.dynamic_invokes_resolved += m_stats.dynamic_invokes_resolved
+                total_stats.nops_stripped += m_stats.nops_stripped
+                total_stats.cyclomatic_complexity_before += m_stats.cyclomatic_complexity_before
+                total_stats.cyclomatic_complexity_after += m_stats.cyclomatic_complexity_after
+                if m_stats.deflattened or m_stats.complexity_reduced > 0:
+                    total_stats.deflattened = True
+        return total_stats
+
 
 __all__ = [
     "MethodNormalizer",
@@ -158,4 +192,6 @@ __all__ = [
     "ResolvedStringConcat",
     "ResolvedLambda",
     "ResolvedReflectionCall",
+    "PureMethodEvaluator",
+    "PureMethodScanner",
 ]

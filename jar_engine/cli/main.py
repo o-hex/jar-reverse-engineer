@@ -63,17 +63,10 @@ def cmd_normalize(args: argparse.Namespace) -> int:
 
     # Pass 2: Method Normalization (CFG & constants)
     normalizer = MethodNormalizer()
-    total_deflattened = 0
-    total_folded = 0
+    stats = normalizer.normalize_archive(archive)
 
-    for c_name, cf in archive.classes.items():
-        for m in cf.methods:
-            stats = normalizer.normalize_method(cf, m)
-            if stats.deflattened or stats.cyclomatic_complexity_before > stats.cyclomatic_complexity_after:
-                total_deflattened += 1
-            total_folded += stats.constants_folded
-
-    print(f"[+] CFG & Constant Normalization: {total_deflattened} dispatch loops unflattened, {total_folded} constants folded")
+    print(f"[+] CFG & Constant Normalization: complexity reduced by {stats.complexity_reduced}, "
+          f"{stats.constants_folded} constants folded, {stats.dead_blocks_pruned} dead blocks pruned")
 
     archive.save(out_path)
     print(f"[+] Saved normalized archive to: {out_path}")

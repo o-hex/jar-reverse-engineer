@@ -1413,3 +1413,73 @@ def test_string_decryptor_multibyte_key_inlined():
     inlined = reconstruct_encrypted_strings(cf, caller_m)
     assert inlined >= 1
 
+
+def test_pure_method_evaluator_skidfuscator_opaque_predicate():
+    """
+    Verifies PureMethodScanner and PureMethodEvaluator automatically identify pure static
+    helpers, evaluate inter-procedural opaque calls, and eliminate fake trap branches.
+    """
+    from jar_engine.model.jar_archive import JarArchive
+    from jar_engine.normalization.pure_evaluator import PureMethodScanner, PureMethodEvaluator
+
+    archive = JarArchive()
+
+    # 1. Pure Helper Class: math(int, int) -> int (a ^ b)
+    cf_helper = create_test_class("com/example/MathHelper")
+    cp_h = cf_helper.constant_pool
+    math_name = cp_h.add_utf8("xor_func")
+    math_desc = cp_h.add_utf8("(II)I")
+    math_code = bytes([Opcode.ILOAD_0, Opcode.ILOAD_1, Opcode.IXOR, Opcode.IRETURN])
+    code_attr_h = CodeAttribute(cp_h.add_utf8("Code"), 2, 2, math_code)
+    m_math = MethodInfo(AccessFlags.PUBLIC | AccessFlags.STATIC, math_name, math_desc, [code_attr_h])
+    cf_helper.methods.append(m_math)
+    archive.add_class(cf_helper)
+
+    # 2. Scanner discovers it
+    pures = PureMethodScanner.scan_archive(archive)
+    assert ("com/example/MathHelper", "xor_func", "(II)I") in pures
+
+    # 3. Target Class calling xor_func(12, 34) == (12 ^ 34)
+    cf_target = create_test_class("com/example/TargetClass")
+    cp_t = cf_target.constant_pool
+    call_ref = cp_t.add_member_ref(ConstantTag.METHODREF, "com/example/MathHelper", "xor_func", "(II)I")
+
+    expected = 12 ^ 34
+    # Bytecode:
+    # 0: bipush 12
+    # 2: bipush 34
+    # 4: invokestatic MathHelper.xor_func
+    # 7: bipush expected
+    # 9: if_icmpeq L_ok (+4 -> 13)
+    # 12: athrow
+    # 13: L_ok: iconst_1, ireturn
+    t_code = (
+        bytes([Opcode.BIPUSH, 12, Opcode.BIPUSH, 34, Opcode.INVOKESTATIC]) + struct.pack(">H", call_ref) +
+        bytes([Opcode.BIPUSH, expected, Opcode.IF_ICMPEQ]) + struct.pack(">h", 4) +
+        bytes([Opcode.ATHROW, Opcode.ICONST_1, Opcode.IRETURN])
+    )
+    code_attr_t = CodeAttribute(cp_t.add_utf8("Code"), 4, 1, t_code)
+    m_target = MethodInfo(AccessFlags.PUBLIC | AccessFlags.STATIC, cp_t.add_utf8("test_method"), cp_t.add_utf8("()I"), [code_attr_t])
+    cf_target.methods.append(m_target)
+    archive.add_class(cf_target)
+
+    # Build CFG and verify complexity drops and athrow trap is pruned
+    cfg = ControlFlowGraph.build(code_attr_t, cp_t, "test_method", "()I")
+    assert len(cfg.blocks) == 3
+    trap_blocks_before = [b for b in cfg.blocks.values() if b.instructions and b.instructions[-1].opcode == Opcode.ATHROW]
+    assert len(trap_blocks_before) == 1
+
+    evaluator = PureMethodEvaluator(pures)
+    simplified = evaluator.simplify_cfg(cfg, cf_target, cp_t)
+    assert simplified >= 1
+
+    # athrow trap block must be pruned
+    trap_blocks_after = [b for b in cfg.blocks.values() if b.instructions and b.instructions[-1].opcode == Opcode.ATHROW]
+    assert len(trap_blocks_after) == 0
+    assert 12 not in cfg.blocks
+
+    new_code, _, _, _ = cfg.reassemble_code(cp_t)
+    assert Opcode.ATHROW not in new_code
+    assert Opcode.IRETURN in new_code
+
+

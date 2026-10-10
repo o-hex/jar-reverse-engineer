@@ -312,6 +312,31 @@ class BytecodeEmulator:
                     b, a = stack.pop(), stack.pop()
                     offset = struct.unpack(">h", operands[:2])[0]
                     pc = (pc + offset) if a <= b else next_pc
+                elif op == Opcode.TABLESWITCH:
+                    pad = (4 - (pc + 1) % 4) % 4
+                    def_off = struct.unpack(">i", operands[pad : pad + 4])[0]
+                    low = struct.unpack(">i", operands[pad + 4 : pad + 8])[0]
+                    high = struct.unpack(">i", operands[pad + 8 : pad + 12])[0]
+                    key = stack.pop()
+                    if low <= key <= high:
+                        case_idx = key - low
+                        jump_off = struct.unpack(">i", operands[pad + 12 + case_idx * 4 : pad + 16 + case_idx * 4])[0]
+                        pc = pc + jump_off
+                    else:
+                        pc = pc + def_off
+                elif op == Opcode.LOOKUPSWITCH:
+                    pad = (4 - (pc + 1) % 4) % 4
+                    def_off = struct.unpack(">i", operands[pad : pad + 4])[0]
+                    npairs = struct.unpack(">i", operands[pad + 4 : pad + 8])[0]
+                    key = stack.pop()
+                    target_pc = pc + def_off
+                    for p_idx in range(npairs):
+                        m_val = struct.unpack(">i", operands[pad + 8 + p_idx * 8 : pad + 12 + p_idx * 8])[0]
+                        if m_val == key:
+                            jump_off = struct.unpack(">i", operands[pad + 12 + p_idx * 8 : pad + 16 + p_idx * 8])[0]
+                            target_pc = pc + jump_off
+                            break
+                    pc = target_pc
 
                 # 6. Method Invocations
                 elif op in (Opcode.INVOKEVIRTUAL, Opcode.INVOKESPECIAL, Opcode.INVOKESTATIC):
@@ -379,6 +404,12 @@ class BytecodeEmulator:
                     res = stack.pop() if stack else None
                     if isinstance(res, str):
                         return res
+                    return None
+                elif op == Opcode.IRETURN:
+                    res = stack.pop() if stack else None
+                    if res is not None:
+                        val = int(res) & 0xFFFFFFFF
+                        return val if val < 0x80000000 else val - 0x100000000
                     return None
 
                 else:
