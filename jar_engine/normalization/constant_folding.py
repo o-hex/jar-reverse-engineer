@@ -473,7 +473,11 @@ class IntraProceduralConstantFolder:
                 elif op in INT_BINARY_OPS:
                     v2 = frame.pop()
                     v1 = frame.pop()
-                    if v1.is_constant and v2.is_constant:
+                    if (
+                        v1.is_constant and v2.is_constant
+                        and isinstance(v1.val, (int, bool))
+                        and isinstance(v2.val, (int, bool))
+                    ):
                         res = ArithmeticEvaluator.eval_binary_int(op, int(v1.val), int(v2.val))
                         if res is not None:
                             producer_set = set(v1.producer_indices) | set(v2.producer_indices) | {i}
@@ -491,7 +495,11 @@ class IntraProceduralConstantFolder:
                 elif op in LONG_BINARY_OPS:
                     v2 = frame.pop()
                     v1 = frame.pop()
-                    if v1.is_constant and v2.is_constant:
+                    if (
+                        v1.is_constant and v2.is_constant
+                        and isinstance(v1.val, int)
+                        and isinstance(v2.val, int)
+                    ):
                         res = ArithmeticEvaluator.eval_binary_long(op, int(v1.val), int(v2.val))
                         if res is not None:
                             producer_set = set(v1.producer_indices) | set(v2.producer_indices) | {i}
@@ -509,7 +517,11 @@ class IntraProceduralConstantFolder:
                 elif op in FLOAT_BINARY_OPS:
                     v2 = frame.pop()
                     v1 = frame.pop()
-                    if v1.is_constant and v2.is_constant:
+                    if (
+                        v1.is_constant and v2.is_constant
+                        and isinstance(v1.val, (int, float))
+                        and isinstance(v2.val, (int, float))
+                    ):
                         res = ArithmeticEvaluator.eval_binary_float(op, float(v1.val), float(v2.val))
                         if res is not None:
                             producer_set = set(v1.producer_indices) | set(v2.producer_indices) | {i}
@@ -527,7 +539,11 @@ class IntraProceduralConstantFolder:
                 elif op in DOUBLE_BINARY_OPS:
                     v2 = frame.pop()
                     v1 = frame.pop()
-                    if v1.is_constant and v2.is_constant:
+                    if (
+                        v1.is_constant and v2.is_constant
+                        and isinstance(v1.val, (int, float))
+                        and isinstance(v2.val, (int, float))
+                    ):
                         res = ArithmeticEvaluator.eval_binary_double(op, float(v1.val), float(v2.val))
                         if res is not None:
                             producer_set = set(v1.producer_indices) | set(v2.producer_indices) | {i}
@@ -544,8 +560,8 @@ class IntraProceduralConstantFolder:
                 # 5. Unary Negation
                 elif op == Opcode.INEG:
                     v = frame.pop()
-                    if v.is_constant:
-                        res = ArithmeticEvaluator.to_int32(-v.val)
+                    if v.is_constant and isinstance(v.val, (int, bool)):
+                        res = ArithmeticEvaluator.to_int32(-int(v.val))
                         producer_set = set(v.producer_indices) | {i}
                         min_idx, max_idx = min(producer_set), max(producer_set)
                         if max_idx - min_idx + 1 == len(producer_set) and max_idx == i:
@@ -560,7 +576,7 @@ class IntraProceduralConstantFolder:
                 # 6. Type Conversions
                 elif Opcode.I2L <= op <= Opcode.I2S or op in (Opcode.L2I, Opcode.L2F, Opcode.L2D, Opcode.F2I, Opcode.D2I):
                     v = frame.pop()
-                    if v.is_constant:
+                    if v.is_constant and isinstance(v.val, (int, float, bool)):
                         conv = ArithmeticEvaluator.eval_conversion(op, v.val)
                         if conv is not None:
                             res_val, res_type = conv
